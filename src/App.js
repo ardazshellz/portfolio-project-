@@ -1,7 +1,4 @@
-// API via Vercel proxy
-const fh = (path) => fetch(`/api/fh?path=${encodeURIComponent(path)}`).then(r=>r.json()).catch(()=>({}));
-const t212 = () => fetch('/api/t212').then(r=>r.json()).catch(()=>({}));
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 
 const C = {
   bg:"#07090d",sur:"#0c0f15",card:"#0f1420",border:"#1a2035",
@@ -12,12 +9,101 @@ const cc = v => v==="high"?C.accent:v==="medium"?C.gold:C.red;
 const cl = v => v==="high"?"HIGH":v==="medium"?"MED":"LOW";
 const sc = s => s>=780?C.accent:s>=640?C.gold:s>=480?C.blue:C.red;
 
+// ── API LAYER — live prices via Vercel proxy ──────────────────────
+const fetchPrice = async (ticker) => {
+  try {
+    const r = await fetch(`/api/fh?path=quote%3Fsymbol%3D${ticker}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d && d.c > 0 ? +d.c.toFixed(2) : null;
+  } catch { return null; }
+};
+
+const fetchNews = async (ticker) => {
+  try {
+    const today = new Date().toISOString().slice(0,10);
+    const from = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+    const r = await fetch(`/api/fh?path=company-news%3Fsymbol%3D${ticker}%26from%3D${from}%26to%3D${today}`);
+    if (!r.ok) return [];
+    const d = await r.json();
+    return Array.isArray(d) ? d.slice(0,5) : [];
+  } catch { return []; }
+};
+
+const Spinner = () => (
+  <span style={{display:"inline-block",width:10,height:10,border:"2px solid #00e0a840",borderTopColor:"#00e0a8",borderRadius:"50%",animation:"spin .8s linear infinite"}}>
+    <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
+  </span>
+);
+
+function getNewsImpact(headline) {
+  const h = headline.toLowerCase();
+  if(h.includes("beat")||h.includes("exceeds")) return "→ Earnings beat can trigger 5–15% upside if guidance raised";
+  if(h.includes("miss")||h.includes("below")) return "→ Miss risk — watch for guidance cut which amplifies downside";
+  if(h.includes("upgrade")) return "→ Analyst upgrade increases institutional buy pressure";
+  if(h.includes("downgrade")) return "→ Downgrade signals institutional selling pressure";
+  if(h.includes("fed")||h.includes("rate")||h.includes("inflation")) return "→ Rate/macro news most impacts SOFI (very high sensitivity)";
+  if(h.includes("china")||h.includes("export")||h.includes("tariff")) return "→ China/trade news directly impacts NVDA — monitor closely";
+  if(h.includes("fda")||h.includes("approval")) return "→ FDA news = binary catalyst, can move 20–50% in one session";
+  if(h.includes("layoff")||h.includes("restructur")) return "→ Restructuring — positive long-term if cost-driven, concerning if distress";
+  return "→ Monitor for follow-up developments confirming or contradicting thesis";
+}
+
+function NewsPanel({ticker}) {
+  const [news,setNews] = useState([]);
+  const [loading,setLoading] = useState(true);
+  useEffect(()=>{
+    setLoading(true);
+    fetchNews(ticker).then(d=>{setNews(d);setLoading(false);});
+  },[ticker]);
+  const sCol = h => {
+    const hl=h.toLowerCase();
+    if(hl.includes("beat")||hl.includes("surge")||hl.includes("rally")||hl.includes("upgrade")||hl.includes("growth")) return "#00e0a8";
+    if(hl.includes("miss")||hl.includes("fall")||hl.includes("drop")||hl.includes("downgrade")||hl.includes("concern")||hl.includes("probe")) return "#ff3d58";
+    return "#f0b429";
+  };
+  return(
+    <div style={{background:"#0c0f15",border:"1px solid #1a2035",borderRadius:8,padding:14,marginBottom:12}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#dce2ed",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+        📰 LATEST NEWS — {ticker} {loading&&<Spinner/>}
+      </div>
+      {!loading&&news.length===0&&(
+        <div style={{fontSize:11,color:"#566078",fontStyle:"italic"}}>
+          No news loaded. Live headlines appear here once Finnhub API key is active on Vercel.
+        </div>
+      )}
+      {news.map((n,i)=>(
+        <div key={i} style={{padding:"8px 0",borderBottom:i<news.length-1?"1px solid #1a2035":"none"}}>
+          <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:sCol(n.headline||""),flexShrink:0,marginTop:4}}/>
+            <div style={{flex:1}}>
+              <a href={n.url} target="_blank" rel="noopener noreferrer"
+                style={{fontSize:11,color:sCol(n.headline||""),textDecoration:"none",lineHeight:1.5,display:"block"}}>
+                {n.headline}
+              </a>
+              <div style={{fontSize:9,color:"#566078",marginTop:2}}>
+                {n.source} · {n.datetime?new Date(n.datetime*1000).toLocaleDateString():""}
+              </div>
+              <div style={{fontSize:10,color:"#566078",marginTop:2,fontStyle:"italic",lineHeight:1.4}}>
+                {getNewsImpact(n.headline||"")}
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 const STOCKS = [
   {ticker:"OSCR",name:"Oscar Health",      shares:342.14, avg:17.09,price:23.27,conv:"high",  score:827,cat:"Hypergrowth",   hold:"24–36mo",sector:"Healthcare",
    netCash:1200,sharesOut:342,dilution:3.5,
    hist:[{y:2021,rev:1920,revG:225.8,ni:-572,nim:-29.8,eps:-3.19},{y:2022,rev:4125,revG:114.8,ni:-606,nim:-14.7,eps:-2.87},{y:2023,rev:5862,revG:42.1,ni:-270,nim:-4.6,eps:-1.22},{y:2024,rev:7955,revG:35.7,ni:21,nim:0.28,eps:0.11}],
    thesis:"Technology-driven health insurer attacking a $1T+ TAM. Revenue +63% YoY. MLR improving. CEO guidance: $2.25 EPS and 5% operating margin by 2027.",
    bull:"MLR below 80%, EBITDA positive late 2025. $55–65.",base:"Steady MLR improvement, multiple expansion. $38–45.",bear:"Regulatory headwinds, capital raise. $15–17.",
+   whenBuy:"Add at $21–22 on RSI pullback to 50–55. Do NOT chase at current levels. Wait for weekly close above $24 with volume.",
+   watchFor:"Watch Q2 2025 MLR print — needs to be below 83%. Watch CMS regulatory announcements. $20.50 is the hard stop.",
    stop:20.50,trim:45,add:"$21–22",exit:19.00,
    aH:42,aL:18,aC:32,aBuy:72,aHold:20,aSell:8,aCount:18,
    peerPE:{low:20,mid:30,high:45},peerNote:"Early-stage health insurer. Peers trade 20–45x once profitable.",
@@ -27,6 +113,8 @@ const STOCKS = [
    hist:[{y:2021,rev:985,revG:68.2,ni:-484,nim:-49.1,eps:-0.52},{y:2022,rev:1521,revG:54.4,ni:-320,nim:-21.0,eps:-0.34},{y:2023,rev:2124,revG:39.6,ni:48,nim:2.3,eps:0.05},{y:2024,rev:2751,revG:29.5,ni:499,nim:18.1,eps:0.48}],
    thesis:"Becoming the Amazon of consumer finance. Bank charter is the moat. Rate cut cycle is the macro catalyst. H&S neckline at $15 is critical.",
    bull:"Rate cuts 2025, student loan refi boom. $28–35.",base:"Steady member growth, margin expansion. $20–24.",bear:"Rate cuts delayed, H&S breaks $15. $9–11.",
+   whenBuy:"Only add between $14.50–15.50. The $15 H&S neckline is the most critical level in portfolio. Must hold on volume. Break below = wait for $13.",
+   watchFor:"Watch $15 neckline weekly — binary. Watch Fed meeting dates and rate cut language. Watch CEO Noto Form 4 filings.",
    stop:13.50,trim:22,add:"$14.50–15.50",exit:13.00,
    aH:31,aL:23,aC:27.67,aBuy:35,aHold:52,aSell:13,aCount:23,
    peerPE:{low:15,mid:25,high:40},peerNote:"Fintech with bank charter. Rate sensitivity is the key re-rating trigger.",
@@ -36,6 +124,8 @@ const STOCKS = [
    hist:[{y:2021,rev:441,revG:38.5,ni:-102,nim:-23.1,eps:-0.51},{y:2022,rev:557,revG:26.3,ni:-92,nim:-16.5,eps:-0.41},{y:2023,rev:727,revG:30.5,ni:-31,nim:-4.3,eps:-0.13},{y:2024,rev:924,revG:27.1,ni:18,nim:1.9,eps:0.07}],
    thesis:"AI-powered marketing cloud with ~28% YoY revenue growth. 250M+ identity graph data moat.",
    bull:"AI marketing spend accelerates. $35–40.",base:"20–25% growth sustained. $28–32.",bear:"Budget cuts, competition. $10–13.",
+   whenBuy:"Add only at $16–18 opportunistically. Do not chase above $20. Keep position small until clear revenue acceleration.",
+   watchFor:"Watch scaled customer count each quarter — needs 15%+ growth. Watch enterprise AI marketing announcements.",
    stop:14.50,trim:30,add:"$16–18",exit:14.00,
    aH:28,aL:14,aC:22,aBuy:60,aHold:30,aSell:10,aCount:15,
    peerPE:{low:15,mid:22,high:35},peerNote:"AdTech/SaaS peers trade 15–35x. Growth rate justifies upper end if AI thesis plays out.",
@@ -45,6 +135,8 @@ const STOCKS = [
    hist:[{y:2021,rev:117929,revG:37.2,ni:39370,nim:33.4,eps:13.77},{y:2022,rev:116609,revG:-1.1,ni:23200,nim:19.9,eps:8.59},{y:2023,rev:134902,revG:15.7,ni:39098,nim:29.0,eps:14.87},{y:2024,rev:164501,revG:21.9,ni:62360,nim:37.9,eps:23.86}],
    thesis:"Compounding at ~20% revenue growth with 40%+ net margins. CapEx concerns overblown if Llama and AI ads monetise.",
    bull:"AI monetisation inflects, Threads scales. $850–1000.",base:"Revenue 18–20% growth. $720–780.",bear:"Regulation, CapEx disappointment. $480–520.",
+   whenBuy:"Current $603 IS the buy zone — Wave 4 correction at 0.382 Fib. Add between $570–600. Do not wait for $550.",
+   watchFor:"Watch Q2 2025 ad revenue growth — needs 18%+. Watch CapEx guidance reduction (massive re-rating catalyst). Watch Threads DAU.",
    stop:540,trim:750,add:"$570–600",exit:530,
    aH:935,aL:480,aC:720,aBuy:85,aHold:12,aSell:3,aCount:52,
    peerPE:{low:18,mid:24,high:32},peerNote:"Mega-cap tech peers trade 22–28x. META historically discounted — re-rating likely as AI monetises.",
@@ -54,6 +146,8 @@ const STOCKS = [
    hist:[{y:2021,rev:469822,revG:21.7,ni:33364,nim:7.1,eps:3.24},{y:2022,rev:513983,revG:9.4,ni:-2722,nim:-0.5,eps:-0.27},{y:2023,rev:574785,revG:11.8,ni:30425,nim:5.3,eps:2.90},{y:2024,rev:637959,revG:11.0,ni:59248,nim:9.3,eps:5.53}],
    thesis:"AWS growing 17%+ with 30%+ margins. Ads approaching $60B annually. Highest fundamental quality in portfolio.",
    bull:"AWS accelerates to 22%+. $320–360.",base:"AWS sustains 17%, margins expand. $270–300.",bear:"AWS slowdown, consumer weakness. $195–210.",
+   whenBuy:"Hold current position. Add on any pullback to $250–260 — the prior breakout and 0.382 Fib level.",
+   watchFor:"Watch AWS quarterly growth — must sustain above 17%. Watch advertising revenue. Watch operating margin trend.",
    stop:220,trim:310,add:"$250–260",exit:215,
    aH:320,aL:195,aC:268,aBuy:92,aHold:7,aSell:1,aCount:58,
    peerPE:{low:28,mid:38,high:50},peerNote:"AWS justifies premium multiple. Blended multiple expanding as AWS mix grows.",
@@ -63,6 +157,8 @@ const STOCKS = [
    hist:[{y:2022,rev:26974,revG:61.4,ni:9752,nim:36.2,eps:3.85},{y:2023,rev:44870,revG:66.3,ni:22090,nim:49.2,eps:8.73},{y:2024,rev:60922,revG:35.8,ni:29760,nim:48.8,eps:11.93},{y:2025,rev:130497,revG:114.2,ni:72880,nim:55.8,eps:29.76}],
    thesis:"AI infrastructure backbone. Blackwell cycle is real. Approaching trim zone at $223. Protect +21% gain.",
    bull:"Blackwell supercycle continues. $350+.",base:"Demand sustains, consolidation $230–260.",bear:"China export restrictions, custom silicon. $160–180.",
+   whenBuy:"DO NOT ADD. Set limit sell for 30% at $250 now. This is a trim zone position. Remainder at $300.",
+   watchFor:"Watch China export policy news — escalation is a sharp sell catalyst. Watch AMD data centre GPU share. Watch Jensen guidance.",
    stop:175,trim:250,add:"DO NOT ADD",exit:170,
    aH:220,aL:135,aC:175,aBuy:80,aHold:17,aSell:3,aCount:55,
    peerPE:{low:25,mid:35,high:50},peerNote:"NVDA commands premium for AI dominance. PE has ranged 25x–75x in 24 months — biggest uncertainty.",
@@ -72,6 +168,8 @@ const STOCKS = [
    hist:[{y:2021,rev:675,revG:44.2,ni:-3555,nim:-526.7,eps:-0.22},{y:2022,rev:1431,revG:112.0,ni:-1740,nim:-121.6,eps:-0.11},{y:2023,rev:2360,revG:64.9,ni:-485,nim:-20.6,eps:-0.03},{y:2024,rev:2820,revG:19.5,ni:12,nim:0.4,eps:0.001}],
    thesis:"Weakest conviction. Down -33%. Defined downtrend. Exit strategy non-negotiable.",
    bull:"SEA macro recovery, fintech licenses. $5.50–6.50.",base:"Slow profitability path. $4.00–4.50.",bear:"Competition, losses widen. $2.50–3.00.",
+   whenBuy:"DO NOT ADD. Execute exit: sell 50% on any bounce to $3.70–3.80. Capital better in HIMS or OSCR.",
+   watchFor:"Any bounce to $3.70–3.80 is your sell trigger. Watch for positive earnings surprise as final exit catalyst.",
    stop:3.00,trim:4.20,add:"DO NOT ADD",exit:3.00,
    aH:5.5,aL:3.2,aC:4.1,aBuy:42,aHold:45,aSell:13,aCount:22,
    peerPE:{low:10,mid:18,high:28},peerNote:"SE Asian fintech peers. Multiple essentially unmeasurable until sustained profitability.",
@@ -81,6 +179,8 @@ const STOCKS = [
    hist:[{y:2021,rev:301,revG:22.5,ni:-53,nim:-17.6,eps:-0.55},{y:2022,rev:340,revG:12.9,ni:-63,nim:-18.5,eps:-0.64},{y:2023,rev:350,revG:2.9,ni:-28,nim:-8.0,eps:-0.28},{y:2024,rev:362,revG:3.4,ni:-8,nim:-2.2,eps:-0.08}],
    thesis:"$4 spike may have been the Toy Story catalyst. Thesis potentially exhausted. Reassess urgently.",
    bull:"Second catalyst wave. $4.50–5.",base:"Holds $3.00–3.50 range.",bear:"Catalyst spent, drifts to $2.50.",
+   whenBuy:"DO NOT ADD. Hold with tight stop. This is binary — Toy Story fires again or thesis is spent.",
+   watchFor:"Watch for official Disney/Pixar partnership announcement. Revenue next quarter needs 5%+ growth. Hard stop $2.60.",
    stop:2.50,trim:4.20,add:"DO NOT ADD",exit:2.60,
    aH:5.5,aL:2.8,aC:3.8,aBuy:40,aHold:40,aSell:20,aCount:8,
    peerPE:{low:8,mid:14,high:22},peerNote:"Small consumer brand. Multiple highly dependent on growth acceleration.",
@@ -90,6 +190,8 @@ const STOCKS = [
    hist:[{y:2021,rev:287597,revG:11.8,ni:17285,nim:6.0,eps:18.08},{y:2022,rev:324162,revG:12.7,ni:20120,nim:6.2,eps:21.18},{y:2023,rev:371622,revG:14.6,ni:22381,nim:6.0,eps:23.86},{y:2024,rev:400278,revG:7.7,ni:14398,nim:3.6,eps:15.46}],
    thesis:"Largest US health insurer with Optum moat. Legal overhang was the entry catalyst. Now recovering.",
    bull:"Legal clears, Optum recovers. $520–580.",base:"Gradual stabilisation. $460–490.",bear:"Legal escalation, MLR deterioration. $300–330.",
+   whenBuy:"Add 1 share at $360–380 if legal resolution news appears. Parkev model shows $489 intrinsic = 28% upside.",
+   watchFor:"Watch for DOJ/legal settlement — single biggest catalyst. Watch MLR each quarter — must stay below 86%. Watch insider buying.",
    stop:340,trim:480,add:"$360–380",exit:338,
    aH:580,aL:290,aC:450,aBuy:65,aHold:25,aSell:10,aCount:28,
    peerPE:{low:16,mid:20,high:24},peerNote:"Healthcare mega-cap. UNH historically 20–22x for Optum moat. Legal discount currently ~4x PE.",
@@ -401,6 +503,7 @@ function AnalystTab({stock}) {
           <div style={{flex:stock.aBuy,background:C.accent,opacity:.8}}/><div style={{flex:stock.aHold,background:C.gold,opacity:.8}}/><div style={{flex:stock.aSell,background:C.red,opacity:.8}}/>
         </div>
       </div>
+      <NewsPanel ticker={stock.ticker}/>
     </div>
   );
 }
@@ -409,7 +512,7 @@ function AnalystTab({stock}) {
 function IntrinsicTab({stock}) {
   const last=stock.hist[stock.hist.length-1];
   const eps=last.eps;
-  const A={OSCR:{bG:.12,bsG:.30,buG:.50,term:.04,wacc:.10},SOFI:{bG:.10,bsG:.22,buG:.35,term:.04,wacc:.10},ZETA:{bG:.12,bsG:.22,buG:.32,term:.04,wacc:.11},META:{bG:.10,bsG:.18,buG:.26,term:.05,wacc:.09},AMZN:{bG:.10,bsG:.16,buG:.22,term:.05,wacc:.09},NVDA:{bG:.15,bsG:.30,buG:.50,term:.05,wacc:.10},GRAB:{bG:-.05,bsG:.10,buG:.20,term:.03,wacc:.13},HNST:{bG:.00,bsG:.08,buG:.18,term:.02,wacc:.12},UNH:{bG:.04,bsG:.10,buG:.14,term:.04,wacc:.08}};
+  const A={OSCR:{bG:.12,bsG:.30,buG:.50,term:.04,wacc:.10},SOFI:{bG:.10,bsG:.22,buG:.35,term:.04,wacc:.10},ZETA:{bG:.12,bsG:.22,buG:.32,term:.04,wacc:.11},META:{bG:.08,bsG:.14,buG:.20,term:.04,wacc:.09},AMZN:{bG:.08,bsG:.13,buG:.18,term:.04,wacc:.09},NVDA:{bG:.10,bsG:.18,buG:.28,term:.04,wacc:.10},GRAB:{bG:-.05,bsG:.10,buG:.20,term:.03,wacc:.13},HNST:{bG:.00,bsG:.08,buG:.18,term:.02,wacc:.12},UNH:{bG:.03,bsG:.08,buG:.12,term:.03,wacc:.08}};
   const a=A[stock.ticker]||{bG:.08,bsG:.15,buG:.25,term:.03,wacc:.10};
   const dcf=g=>{if(!eps||eps<=0)return null;let pv=0,e=eps;for(let i=1;i<=10;i++){e*=(1+g);pv+=e/Math.pow(1+a.wacc,i);}return +(pv+(e*(1+a.term))/(a.wacc-a.term)/Math.pow(1+a.wacc,10)).toFixed(2);};
   const ivB=dcf(a.bG),ivBs=dcf(a.bsG),ivBu=dcf(a.buG);
@@ -798,6 +901,23 @@ function StockDetail({stock,onBack}) {
               </div>
             ))}
           </div>
+          {/* When to buy / What to watch */}
+          {(stock.whenBuy||stock.watchFor)&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+              {stock.whenBuy&&(
+                <div style={{background:"#00e0a80a",border:"1px solid #00e0a825",borderRadius:7,padding:"11px 12px"}}>
+                  <div style={{fontSize:9,fontWeight:700,color:C.accent,marginBottom:5}}>📍 WHEN TO BUY / ADD</div>
+                  <p style={{fontSize:11,color:C.text,lineHeight:1.65,margin:0}}>{stock.whenBuy}</p>
+                </div>
+              )}
+              {stock.watchFor&&(
+                <div style={{background:"#f0b4290a",border:"1px solid #f0b42925",borderRadius:7,padding:"11px 12px"}}>
+                  <div style={{fontSize:9,fontWeight:700,color:C.gold,marginBottom:5}}>👁 WHAT TO WATCH</div>
+                  <p style={{fontSize:11,color:C.text,lineHeight:1.65,margin:0}}>{stock.watchFor}</p>
+                </div>
+              )}
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
             {[["ADD ZONE",stock.add,C.accent],["TRIM TARGET","$"+stock.trim,C.gold],["STOP LOSS","$"+stock.stop,C.red],["EXIT WARN","$"+stock.exit,C.red]].map(([l,v,col])=>(
               <div key={l} style={{background:`${col}10`,border:`1px solid ${col}20`,borderRadius:5,padding:"9px 10px"}}>
@@ -816,6 +936,51 @@ function StockDetail({stock,onBack}) {
   );
 }
 
+
+// ── DEPOSIT TRACKER ───────────────────────────────────────────────
+const DEPOSIT_TARGET = 50000;
+function DepositTracker({stocks}) {
+  const liq = stocks.filter(s=>!["VUAG","VUSA","VWRP"].includes(s.ticker));
+  const liqVal = liq.reduce((s,p)=>s+(p.price*p.shares),0);
+  const savings = 600*11; // £600/mo × 11 months remaining
+  const lisaBonus = 100*12*1.25; // LISA with 25% bonus
+  const bullTargets = {OSCR:55,SOFI:28,ZETA:30,META:750,AMZN:300,NVDA:250,GRAB:4.20,HNST:4.20,UNH:480};
+  const bullVal = liq.reduce((s,p)=>s+((bullTargets[p.ticker]||p.price)*p.shares),0)*0.6;
+  const baseCase = liqVal + savings + lisaBonus;
+  const bullCase = bullVal + savings + lisaBonus;
+  const pct = Math.min(100,(baseCase/DEPOSIT_TARGET)*100);
+  return(
+    <div style={{background:C.sur,border:"1px solid #a78bfa30",borderRadius:8,padding:14,marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={{fontSize:11,fontWeight:700,color:C.text}}>🏠 NORWICH DEPOSIT TRACKER</span>
+        <Badge label="April 2027" color={C.purple}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:10}}>
+        {[["TARGET","£"+DEPOSIT_TARGET.toLocaleString(),C.text],["BASE CASE","£"+baseCase.toFixed(0),baseCase>=DEPOSIT_TARGET?C.accent:C.gold],["BULL CASE","£"+bullCase.toFixed(0),C.accent]].map(([l,v,col])=>(
+          <div key={l} style={{background:C.card,border:`1px solid ${col}20`,borderRadius:5,padding:"8px 10px",textAlign:"center"}}>
+            <div style={{fontSize:8,color:C.muted,marginBottom:2}}>{l}</div>
+            <div style={{fontSize:15,fontWeight:900,color:col,fontFamily:"monospace"}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{marginBottom:4}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+          <span style={{fontSize:10,color:C.muted}}>Base case vs £50k target</span>
+          <span style={{fontSize:10,fontWeight:700,color:C.gold}}>{pct.toFixed(1)}%</span>
+        </div>
+        <div style={{height:8,background:C.faint,borderRadius:4}}>
+          <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#f0b429,#00e0a8)",borderRadius:4,transition:"width 1s"}}/>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginTop:8,fontSize:10,color:C.muted}}>
+        <div>Portfolio (liquidatable): <span style={{color:C.text,fontWeight:700}}>£{liqVal.toFixed(0)}</span></div>
+        <div>Monthly savings remaining: <span style={{color:C.text,fontWeight:700}}>£{savings.toFixed(0)}</span></div>
+        <div>LISA + gov bonus: <span style={{color:C.purple,fontWeight:700}}>£{lisaBonus.toFixed(0)}</span></div>
+        <div>ETFs (ring-fenced ✕): <span style={{color:C.muted,fontWeight:700}}>never counted</span></div>
+      </div>
+    </div>
+  );
+}
 // ── PORTFOLIO CARD ────────────────────────────────────────────────
 function PortCard({stock,onClick}) {
   const pos=stock.price>=stock.avg;
@@ -860,7 +1025,7 @@ function PortCard({stock,onClick}) {
 }
 
 // ── REMAINING TABS ────────────────────────────────────────────────
-function MacroTab(){
+function MacroTab({stocks=STOCKS}){
   return(
     <div>
       <div style={{background:C.sur,border:`1px solid ${C.border}`,borderRadius:7,padding:12,marginBottom:10}}>
@@ -997,10 +1162,33 @@ function SearchTab(){
 export default function App(){
   const [tab,setTab]=useState("portfolio");
   const [sel,setSel]=useState(null);
-  const tv=STOCKS.reduce((s,p)=>s+(p.price*p.shares),0);
-  const tc=STOCKS.reduce((s,p)=>s+(p.avg*p.shares),0);
+  const [stocks,setStocks]=useState(STOCKS);
+  const [lastUpdated,setLastUpdated]=useState(null);
+  const [updating,setUpdating]=useState(false);
+
+  const refreshPrices = useCallback(async()=>{
+    setUpdating(true);
+    const updated = await Promise.all(
+      STOCKS.map(async(s)=>{
+        const livePrice = await fetchPrice(s.ticker);
+        return livePrice ? {...s, price:livePrice} : s;
+      })
+    );
+    setStocks(updated);
+    setLastUpdated(new Date().toLocaleTimeString());
+    setUpdating(false);
+  },[]);
+
+  useEffect(()=>{
+    refreshPrices();
+    const id = setInterval(refreshPrices, 60000);
+    return ()=>clearInterval(id);
+  },[refreshPrices]);
+
+  const tv=stocks.reduce((s,p)=>s+(p.price*p.shares),0);
+  const tc=stocks.reduce((s,p)=>s+(p.avg*p.shares),0);
   const pnl=tv-tc,pct=(pnl/tc*100);
-  const stock=sel?STOCKS.find(s=>s.ticker===sel):null;
+  const stock=sel?stocks.find(s=>s.ticker===sel):null;
   return(
     <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Fira Code','Courier New',monospace",paddingBottom:60}}>
       <div style={{background:C.sur,borderBottom:`1px solid ${C.border}`,padding:"0 12px",position:"sticky",top:0,zIndex:100}}>
@@ -1013,7 +1201,11 @@ export default function App(){
               <button key={k} onClick={()=>{setTab(k);setSel(null);}} style={{background:tab===k?`${C.accent}15`:"transparent",border:"none",color:tab===k?C.accent:C.muted,padding:"5px 9px",borderRadius:3,fontSize:11,fontWeight:tab===k?700:400,fontFamily:"monospace",whiteSpace:"nowrap",cursor:"pointer"}}>{l}</button>
             ))}
           </div>
-          <span style={{fontSize:9,color:C.muted,flexShrink:0}}>Preview</span>
+          <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+            {updating&&<Spinner/>}
+            {lastUpdated&&<span style={{fontSize:8,color:C.muted}}>{lastUpdated}</span>}
+            <button onClick={refreshPrices} style={{background:"transparent",border:"1px solid #1a2035",color:"#566078",borderRadius:3,padding:"2px 6px",fontSize:9,cursor:"pointer",fontFamily:"monospace"}}>↻</button>
+          </div>
         </div>
       </div>
       <div style={{padding:"12px 12px 0"}}>
@@ -1027,11 +1219,12 @@ export default function App(){
                 </div>
               ))}
             </div>
-            {STOCKS.map(s=><PortCard key={s.ticker} stock={s} onClick={()=>setSel(s.ticker)}/>)}
+            <DepositTracker stocks={stocks}/>
+            {stocks.map(s=><PortCard key={s.ticker} stock={s} onClick={()=>setSel(s.ticker)}/>)}
           </>
         )}
         {stock&&<StockDetail stock={stock} onBack={()=>setSel(null)}/>}
-        {tab==="macro"&&!stock&&<MacroTab/>}
+        {tab==="macro"&&!stock&&<MacroTab stocks={stocks}/>}
         {tab==="allocation"&&!stock&&<AllocTab/>}
         {tab==="search"&&!stock&&<SearchTab/>}
       </div>
